@@ -6627,9 +6627,17 @@ void Server::_rename_apply(MDRequestRef& mdr, CDentry *srcdn, CDentry *destdn, C
   CInode *in = srcdnl->get_inode();
   assert(in);
 
-  if (srcdn->get_dir()->inode->is_stray()) {
+  if (srcdn->get_dir()->inode->is_stray() &&
+      srcdn->get_dir()->inode->get_stray_owner() == mds->whoami) {
+    // A reintegration event or a migration away from me
     dout(10) << __func__ << ": dentry was a stray, updating stats" << dendl;
     mdcache->notify_stray_removed();
+  }
+
+  if (destdn->get_dir()->inode->is_stray() &&
+      destdn->get_dir()->inode->get_stray_owner() == mds->whoami) {
+    // A stray migration (to me)
+    mdcache->notify_stray_created();
   }
 
   bool srcdn_was_remote = srcdnl->is_remote();

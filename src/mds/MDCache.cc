@@ -3551,14 +3551,15 @@ void MDCache::remove_inode_recursive(CInode *in)
  * for an MDS peer in the 'stopping' state, such that the peer can
  * empty its cache and finish shutting down.
  *
- * We have to make sure we're only expiring directories and not
- * files, in order to avoid stepping on any ongoing stray migrations, and
- * that we should not attempt to expire anything that still has refs.
+ * We have to make sure we're only expiring un-referenced items to
+ * avoid interfering with ongoing stray-movement (we can't distinguish
+ * between the "moving my strays" and "waiting for my cache to empty"
+ * phases within 'stopping')
  *
  * @return false if we completed cleanly, true if caller should stop
  *         expiring because we hit something with refs.
  */
-bool MDCache::expire_dirs_recursive(
+bool MDCache::expire_recursive(
   CInode *in,
   map<mds_rank_t, MCacheExpire*>& expiremap,
   CDir *subtree)
@@ -3566,16 +3567,6 @@ bool MDCache::expire_dirs_recursive(
   assert(!in->is_auth());
 
   dout(10) << __func__ << ":" << *in << dendl;
-
-  if (in->get_num_ref() > (int)in->is_dirty() + (int)in->is_dirty_parent()) {
-    dout(20) << __func__ << ": too many refs (" << in->get_num_ref()
-            << ")" << dendl;
-    return true;
-  }
-
-  if (!in->is_dir()) {
-    return true;
-  }
 
   mds_rank_t owner = subtree->dir_auth.first;
   if (expiremap.count(owner) == 0)  {
@@ -3585,6 +3576,15 @@ bool MDCache::expire_dirs_recursive(
 
   list<CDir*> ls;
   in->get_dirfrags(ls);
+
+  int expected_refs =
+    (int)in->is_dirty() + (int)in->is_dirty_parent() + ls.size();
+  if (in->get_num_ref() > expected_refs) {
+    dout(20) << __func__ << ": too many refs (" << in->get_num_ref()
+            << ")" << dendl;
+    return true;
+  }
+
   list<CDir*>::iterator p = ls.begin();
   for (std::list<CDir*>::iterator p = ls.begin(); p != ls.end(); ++p) {
     CDir *subdir = *p;
@@ -3599,9 +3599,10 @@ bool MDCache::expire_dirs_recursive(
 	CInode *tin = dnl->get_inode();
 	const bool abort = expire_recursive(tin, expiremap, subtree);
         if (abort) {
-
+          return true;
         }
 	subdir->unlink_inode(dn);
+        remove_inode(tin);
       }
       subdir->remove_dentry(dn);
 
@@ -3615,7 +3616,6 @@ bool MDCache::expire_dirs_recursive(
   }
 
   expire_msg->add_inode(subtree->dirfrag(), in->vino(), in->get_replica_nonce());
-  remove_inode(in);
 
   return false;
 }
@@ -6240,7 +6240,10 @@ bool MDCache::trim(int max, int count)
       const MDSMap::mds_info_t &owner_info = mds->mdsmap->get_mds_info(owner);
       if (owner_info.state == MDSMap::STATE_STOPPING) {
         dout(20) << __func__ << ": it's stopping, remove it" << dendl;
-	expire_dirs_recursive(subtree->inode, expiremap, subtree);
+	const bool aborted = expire_recursive(subtree->inode, expiremap, subtree);
+        if (!aborted) {
+          remove_inode(subtree->inode);
+        }
       } else {
         dout(20) << __func__ << ": not stopping, leaving it alone" << dendl;
       }

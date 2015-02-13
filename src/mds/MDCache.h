@@ -185,6 +185,11 @@ public:
     stray_manager.notify_stray_removed();
   }
 
+  void notify_stray_created()
+  {
+    stray_manager.notify_stray_created();
+  }
+
   // -- client caps --
   uint64_t              last_cap_id;
   
@@ -636,7 +641,7 @@ public:
     return my_ambiguous_imports.count((dir)->dirfrag()) == 0 &&
 	   uncommitted_slave_rename_olddir.count(dir->inode) == 0;
   }
-  bool expire_dirs_recursive(
+  bool expire_recursive(
     CInode *in,
     std::map<mds_rank_t, MCacheExpire*>& expiremap,
     CDir *subtree);
