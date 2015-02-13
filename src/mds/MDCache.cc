@@ -3550,8 +3550,15 @@ void MDCache::remove_inode_recursive(CInode *in)
  * messages.  This is used when giving up all replicas of entities
  * for an MDS peer in the 'stopping' state, such that the peer can
  * empty its cache and finish shutting down.
+ *
+ * We have to make sure we're only expiring directories and not
+ * files, in order to avoid stepping on any ongoing stray migrations, and
+ * that we should not attempt to expire anything that still has refs.
+ *
+ * @return false if we completed cleanly, true if caller should stop
+ *         expiring because we hit something with refs.
  */
-void MDCache::expire_recursive(
+bool MDCache::expire_dirs_recursive(
   CInode *in,
   map<mds_rank_t, MCacheExpire*>& expiremap,
   CDir *subtree)
@@ -3559,6 +3566,16 @@ void MDCache::expire_recursive(
   assert(!in->is_auth());
 
   dout(10) << __func__ << ":" << *in << dendl;
+
+  if (in->get_num_ref() > (int)in->is_dirty() + (int)in->is_dirty_parent()) {
+    dout(20) << __func__ << ": too many refs (" << in->get_num_ref()
+            << ")" << dendl;
+    return true;
+  }
+
+  if (!in->is_dir()) {
+    return true;
+  }
 
   mds_rank_t owner = subtree->dir_auth.first;
   if (expiremap.count(owner) == 0)  {
@@ -3580,8 +3597,11 @@ void MDCache::expire_recursive(
       CDentry::linkage_t *dnl = dn->get_linkage();
       if (dnl->is_primary()) {
 	CInode *tin = dnl->get_inode();
+	const bool abort = expire_recursive(tin, expiremap, subtree);
+        if (abort) {
+
+        }
 	subdir->unlink_inode(dn);
-	expire_recursive(tin, expiremap, subtree);
       }
       subdir->remove_dentry(dn);
 
@@ -3596,6 +3616,8 @@ void MDCache::expire_recursive(
 
   expire_msg->add_inode(subtree->dirfrag(), in->vino(), in->get_replica_nonce());
   remove_inode(in);
+
+  return false;
 }
 
 void MDCache::trim_unlinked_inodes()
@@ -6218,17 +6240,7 @@ bool MDCache::trim(int max, int count)
       const MDSMap::mds_info_t &owner_info = mds->mdsmap->get_mds_info(owner);
       if (owner_info.state == MDSMap::STATE_STOPPING) {
         dout(20) << __func__ << ": it's stopping, remove it" << dendl;
-#if 0
-        if (subtree->get_num_ref() == 1) {  // subtree pin
-          trim_dirfrag(subtree, 0, expiremap);
-        } else {
-          dout(20) << __func__  << ": too many refs (" << subtree->get_num_ref() << ")" << dendl;
-        }
-        trim_non_auth_subtree(subtree);
-        //remove_subtree(subtree);
-#else
-	expire_recursive(subtree->inode, expiremap, subtree);
-#endif
+	expire_dirs_recursive(subtree->inode, expiremap, subtree);
       } else {
         dout(20) << __func__ << ": not stopping, leaving it alone" << dendl;
       }
