@@ -47,6 +47,7 @@ class StrayManager : public md_config_obs_t
   uint64_t num_strays_purging;
   uint64_t num_strays_delayed;
 
+  void truncate(CDentry *dn);
   void purge(CDentry *dn, uint32_t op_allowance);
   void _purge_stray_purged(CDentry *dn, uint32_t ops, bool only_head);
   void _purge_stray_logged(CDentry *dn, version_t pdv, LogSegment *ls);

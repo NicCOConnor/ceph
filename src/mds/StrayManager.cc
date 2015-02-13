@@ -519,6 +519,13 @@ struct C_EvalStray : public StrayManagerContext {
   }
 };
 
+struct C_MDC_EvalStray : public StrayManagerContext {
+  CDentry *dn;
+  C_MDC_EvalStray(StrayManager *sm, CDentry *d) : StrayManagerContext(sm), dn(d) {}
+  void finish(int r) {
+    pq->eval_stray(dn);
+  }
+};
 
 /**
  * Evaluate a stray dentry for purging or reintegration.
@@ -561,22 +568,21 @@ bool StrayManager::eval_stray(CDentry *dn, bool delay)
 
   // purge?
   if (in->inode.nlink == 0) {
-    if (in->is_dir()) {
-      // past snaprealm parents imply snapped dentry remote links.
-      // only important for directories.  normal file data snaps are handled
-      // by the object store.
-      if (in->snaprealm && in->snaprealm->has_past_parents()) {
-        if (!in->snaprealm->have_past_parents_open() &&
-            !in->snaprealm->open_parents(new C_MDC_EvalStray(this, dn))) {
-          return;
-        }
-        in->snaprealm->prune_past_parents();
+    // past snaprealm parents imply snapped dentry remote links.
+    // only important for directories.  normal file data snaps are handled
+    // by the object store.
+    if (in->snaprealm && in->snaprealm->has_past_parents()) {
+      if (!in->snaprealm->have_past_parents_open() &&
+          !in->snaprealm->open_parents(new C_MDC_EvalStray(this, dn))) {
+        return false;
+      }
+      in->snaprealm->prune_past_parents();
     }
     if (in->is_dir()) {
       if (in->snaprealm && in->snaprealm->has_past_parents()) {
 	dout(20) << "  directory has past parents "
           << in->snaprealm->srnode.past_parents << dendl;
-	return;  // not until some snaps are deleted.
+	return false;  // not until some snaps are deleted.
       }
 
       if (in->has_dirfrags()) {
@@ -623,7 +629,7 @@ bool StrayManager::eval_stray(CDentry *dn, bool delay)
       dout(20) << " file has past parents "
         << in->snaprealm->srnode.past_parents << dendl;
       if (in->is_file() && in->get_projected_inode()->size > 0) {
-	truncate_stray(dn); // truncate head objects    
+	truncate(dn); // truncate head objects    
       }
     } else {
       if (in->is_dir()) {
@@ -801,7 +807,7 @@ void StrayManager::abort_queue()
   ready_for_purge.clear();
 }
 
-void StrayManager::truncate_stray(CDentry *dn)
+void StrayManager::truncate(CDentry *dn)
 {
   CDentry::linkage_t *dnl = dn->get_projected_linkage();
   CInode *in = dnl->get_inode();
@@ -817,7 +823,7 @@ void StrayManager::truncate_stray(CDentry *dn)
 
   C_GatherBuilder gather(
     g_ceph_context,
-    new C_OnFinisher(new C_IO_MDC_PurgeStrayPurged(this, dn, true),
+    new C_OnFinisher(new C_IO_PurgeStrayPurged(this, dn, true, 0 /*XXX ops */),
 		     &mds->finisher));
 
   SnapRealm *realm = in->find_snaprealm();
@@ -851,6 +857,7 @@ void StrayManager::truncate_stray(CDentry *dn)
 
   assert(gather.has_subs());
   gather.activate();
+}
 
 const char** StrayManager::get_tracked_conf_keys() const
 {
