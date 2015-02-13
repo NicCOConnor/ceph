@@ -6638,6 +6638,7 @@ void Server::_rename_apply(MDRequestRef& mdr, CDentry *srcdn, CDentry *destdn, C
       destdn->get_dir()->inode->get_stray_owner() == mds->whoami) {
     // A stray migration (to me)
     mdcache->notify_stray_created();
+    mdcache->maybe_eval_stray(destdn->get_dirt()->inode, true);
   }
 
   bool srcdn_was_remote = srcdnl->is_remote();
